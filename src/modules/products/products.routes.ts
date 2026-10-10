@@ -4,11 +4,7 @@ import { ProductsController } from './products.controller';
 
 const router = Router();
 
-// Public Catalog endpoints
-router.get('/', ProductsController.getProducts);
-router.get('/:slug', ProductsController.getProductBySlug);
-
-// Admin Management endpoints
+// 1. Admin Management endpoints (placed first to prevent clash with /:slug)
 router.get(
   '/admin/all',
   authenticateAdmin,
@@ -21,6 +17,20 @@ router.post(
   authenticateAdmin,
   requirePermission('products:write'),
   ProductsController.adminCreateProduct
+);
+
+router.put(
+  '/admin/:id',
+  authenticateAdmin,
+  requirePermission('products:write'),
+  ProductsController.adminUpdateProduct
+);
+
+router.patch(
+  '/admin/:id',
+  authenticateAdmin,
+  requirePermission('products:write'),
+  ProductsController.adminUpdateProduct
 );
 
 router.patch(
@@ -37,5 +47,8 @@ router.delete(
   ProductsController.adminDeleteProduct
 );
 
-export default router;
+// 2. Public Catalog endpoints
+router.get('/', ProductsController.getProducts);
+router.get('/:slug', ProductsController.getProductBySlug);
 
+export default router;

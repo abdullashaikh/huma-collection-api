@@ -8,49 +8,62 @@ const getProductsQuerySchema = z.object({
   page: z.coerce.number().optional(),
   limit: z.coerce.number().optional(),
   category: z.string().optional(),
+  subcategory: z.string().optional(),
+  audience: z.enum(['MEN', 'WOMEN', 'ALL', 'men', 'women', 'all', 'both', 'BOTH']).optional(),
   search: z.string().optional(),
   minPrice: z.coerce.number().optional(),
   maxPrice: z.coerce.number().optional(),
   fabric: z.string().optional(),
   style: z.string().optional(),
   size: z.string().optional(),
-  sort: z.enum(['price_asc', 'price_desc', 'newest', 'bestseller']).optional(),
+  sort: z.enum(['price_asc', 'price_desc', 'newest', 'bestseller', 'display_order']).optional(),
   featuredOnly: z.coerce.boolean().optional(),
 });
 
 const createProductSchema = z.object({
   categoryId: z.number().int().positive(),
+  subcategoryId: z.number().int().positive().optional().nullable(),
+  audience: z.enum(['MEN', 'WOMEN', 'ALL']).default('WOMEN'),
   name: z.string().min(3),
   slug: z.string().min(3),
   skuBase: z.string().min(3),
   shortDescription: z.string().min(10),
   description: z.string().min(20),
-  fabric: z.string().optional(),
-  pattern: z.string().optional(),
-  style: z.string().optional(),
-  careInstructions: z.string().optional(),
+  fabric: z.string().optional().nullable(),
+  materials: z.string().optional().nullable(),
+  pattern: z.string().optional().nullable(),
+  style: z.string().optional().nullable(),
+  colors: z.any().optional().nullable(),
+  tags: z.any().optional().nullable(),
+  careInstructions: z.string().optional().nullable(),
   basePrice: z.number().positive(),
-  salePrice: z.number().positive().optional(),
+  salePrice: z.number().positive().optional().nullable(),
+  displayOrder: z.number().int().default(0),
   isFeatured: z.boolean().optional(),
   isBestseller: z.boolean().optional(),
   isNewArrival: z.boolean().optional(),
-  status: z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']).optional(),
-  seoTitle: z.string().optional(),
-  seoDescription: z.string().optional(),
+  status: z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED']).default('ACTIVE'),
+  seoTitle: z.string().optional().nullable(),
+  seoDescription: z.string().optional().nullable(),
   images: z.array(z.object({
     s3Key: z.string().optional(),
     s3Url: z.string().url(),
     altText: z.string().optional(),
     isPrimary: z.boolean().optional(),
+    sortOrder: z.number().optional(),
+    viewType: z.string().optional(),
   })).optional(),
   variants: z.array(z.object({
+    id: z.number().optional(),
     sku: z.string(),
     price: z.number().positive(),
-    compareAtPrice: z.number().positive().optional(),
+    compareAtPrice: z.number().positive().optional().nullable(),
     stockQuantity: z.number().int().nonnegative(),
     lowStockThreshold: z.number().int().optional(),
   })).min(1, 'At least one variant is required'),
 });
+
+const updateProductSchema = createProductSchema.partial();
 
 export class ProductsController {
   static async getProducts(req: Request, res: Response): Promise<void> {
@@ -82,6 +95,14 @@ export class ProductsController {
     sendSuccess(res, result, 'Product created successfully', 201);
   }
 
+  static async adminUpdateProduct(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const productId = parseInt(req.params.id, 10);
+    const data = updateProductSchema.parse(req.body);
+    const adminId = req.admin?.adminId || 1;
+    const result = await ProductsService.adminUpdateProduct(productId, data, adminId);
+    sendSuccess(res, result, 'Product updated successfully');
+  }
+
   static async adminUpdateStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
     const productId = parseInt(req.params.id, 10);
     const { status } = req.body;
@@ -97,4 +118,3 @@ export class ProductsController {
     sendSuccess(res, null, 'Product deleted successfully');
   }
 }
-

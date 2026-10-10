@@ -59,6 +59,27 @@ export interface ProductVariant {
   };
 }
 
+export type AudienceScope = 'MEN' | 'WOMEN' | 'ALL';
+
+export interface CategoryItem {
+  id: number;
+  parentId?: number | null;
+  name: string;
+  slug: string;
+  description?: string | null;
+  imageUrl?: string | null;
+  audience: AudienceScope;
+  isActive: boolean;
+  displayOrder: number;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  productCount?: number;
+  subcategories?: CategoryItem[];
+  parentName?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface ProductImage {
   id: number;
   productId: number;
@@ -67,24 +88,33 @@ export interface ProductImage {
   altText: string;
   sortOrder: number;
   isPrimary: boolean;
+  viewType?: string;
 }
 
 export interface ProductItem {
   id: number;
   categoryId: number;
+  subcategoryId?: number | null;
   categoryName?: string;
   categorySlug?: string;
+  subcategoryName?: string;
+  subcategorySlug?: string;
+  audience: AudienceScope;
   name: string;
   slug: string;
   skuBase: string;
   shortDescription: string;
   description: string;
   fabric: string | null;
+  materials?: string | null;
   pattern: string | null;
   style: string | null;
+  colors?: any;
   careInstructions: string | null;
+  tags?: any;
   basePrice: number;
   salePrice: number | null;
+  displayOrder?: number;
   isFeatured: boolean;
   isBestseller: boolean;
   isNewArrival: boolean;

@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS product_categories (
   slug VARCHAR(120) NOT NULL UNIQUE,
   description TEXT NULL,
   image_url VARCHAR(500) NULL,
+  audience ENUM('MEN', 'WOMEN', 'ALL') NOT NULL DEFAULT 'WOMEN',
   is_active BOOLEAN DEFAULT TRUE,
   display_order INT DEFAULT 0,
   seo_title VARCHAR(200) NULL,
@@ -133,6 +134,7 @@ CREATE TABLE IF NOT EXISTS product_categories (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_cat_parent (parent_id),
+  INDEX idx_cat_audience (audience),
   CONSTRAINT fk_cat_parent FOREIGN KEY (parent_id) REFERENCES product_categories(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -140,17 +142,23 @@ CREATE TABLE IF NOT EXISTS product_categories (
 CREATE TABLE IF NOT EXISTS products (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   category_id INT NOT NULL,
+  subcategory_id INT NULL,
+  audience ENUM('MEN', 'WOMEN', 'ALL') NOT NULL DEFAULT 'WOMEN',
   name VARCHAR(255) NOT NULL,
   slug VARCHAR(255) NOT NULL UNIQUE,
   sku_base VARCHAR(50) NOT NULL UNIQUE,
   short_description VARCHAR(500) NOT NULL,
   description LONGTEXT NOT NULL,
   fabric VARCHAR(100) NULL,
+  materials VARCHAR(255) NULL,
   pattern VARCHAR(100) NULL,
   style VARCHAR(100) NULL,
+  colors JSON NULL,
   care_instructions TEXT NULL,
+  tags JSON NULL,
   base_price DECIMAL(10, 2) NOT NULL,
   sale_price DECIMAL(10, 2) NULL,
+  display_order INT DEFAULT 0,
   is_featured BOOLEAN DEFAULT FALSE,
   is_bestseller BOOLEAN DEFAULT FALSE,
   is_new_arrival BOOLEAN DEFAULT FALSE,
@@ -163,10 +171,25 @@ CREATE TABLE IF NOT EXISTS products (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FULLTEXT idx_prod_search (name, short_description),
   INDEX idx_prod_cat (category_id),
+  INDEX idx_prod_subcat (subcategory_id),
+  INDEX idx_prod_audience (audience),
+  INDEX idx_prod_display_order (display_order),
   INDEX idx_prod_status (status),
   INDEX idx_prod_featured (is_featured),
   INDEX idx_prod_bestseller (is_bestseller),
-  CONSTRAINT fk_prod_cat FOREIGN KEY (category_id) REFERENCES product_categories(id)
+  CONSTRAINT fk_prod_cat FOREIGN KEY (category_id) REFERENCES product_categories(id),
+  CONSTRAINT fk_prod_subcat FOREIGN KEY (subcategory_id) REFERENCES product_categories(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 10b. Product Category Mappings (Many-to-Many bridge)
+CREATE TABLE IF NOT EXISTS product_category_mappings (
+  product_id BIGINT NOT NULL,
+  category_id INT NOT NULL,
+  is_primary BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (product_id, category_id),
+  CONSTRAINT fk_pcm_product FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pcm_category FOREIGN KEY (category_id) REFERENCES product_categories(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 11. Product Images
@@ -178,6 +201,7 @@ CREATE TABLE IF NOT EXISTS product_images (
   alt_text VARCHAR(255) NOT NULL,
   sort_order INT DEFAULT 0,
   is_primary BOOLEAN DEFAULT FALSE,
+  view_type VARCHAR(50) NOT NULL DEFAULT 'FRONT',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_img_prod (product_id),
   CONSTRAINT fk_img_prod FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE

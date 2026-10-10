@@ -1,9 +1,17 @@
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
 
-// Load .env
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load .env or .env.production
+const envProdPath = path.resolve(__dirname, '../../.env.production');
+const envDevPath = path.resolve(__dirname, '../../.env');
+
+if (process.env.NODE_ENV === 'production' && fs.existsSync(envProdPath)) {
+  dotenv.config({ path: envProdPath });
+} else {
+  dotenv.config({ path: envDevPath });
+}
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),

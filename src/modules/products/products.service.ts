@@ -1,24 +1,27 @@
 import { query, withTransaction } from '../../config/database';
 import { AppError } from '../../middleware/error-handler';
-import { ProductItem } from '../../types';
+import { AudienceScope, ProductItem } from '../../types';
 
 export interface ProductFilterQuery {
   page?: number;
   limit?: number;
   category?: string;
+  subcategory?: string;
+  audience?: string;
   search?: string;
   minPrice?: number;
   maxPrice?: number;
   fabric?: string;
   style?: string;
   size?: string;
-  sort?: 'price_asc' | 'price_desc' | 'newest' | 'bestseller';
+  sort?: 'price_asc' | 'price_desc' | 'newest' | 'bestseller' | 'display_order';
   featuredOnly?: boolean;
 }
 
 export class ProductsService {
   /**
    * Retrieves paginated, filtered, and sorted products for customer catalog.
+   * STRICT: Only published, active products whose categories are active.
    */
   static async getProducts(filters: ProductFilterQuery): Promise<{
     products: any[];
@@ -28,13 +31,35 @@ export class ProductsService {
     const limit = Math.min(50, Math.max(1, Number(filters.limit) || 12));
     const offset = (page - 1) * limit;
 
-    const whereClauses: string[] = ["p.status = 'ACTIVE'", 'p.deleted_at IS NULL'];
+    const whereClauses: string[] = [
+      "p.status = 'ACTIVE'",
+      'p.deleted_at IS NULL',
+      'c.is_active = 1',
+    ];
     const params: any[] = [];
 
-    // Category filter
+    // Category filter (by slug or ID)
     if (filters.category) {
-      whereClauses.push('c.slug = ?');
-      params.push(filters.category);
+      whereClauses.push('(c.slug = ? OR c.id = ?)');
+      params.push(filters.category, isNaN(Number(filters.category)) ? -1 : Number(filters.category));
+    }
+
+    // Subcategory filter
+    if (filters.subcategory) {
+      whereClauses.push('(sub.slug = ? OR p.subcategory_id = ?)');
+      params.push(filters.subcategory, isNaN(Number(filters.subcategory)) ? -1 : Number(filters.subcategory));
+    }
+
+    // Audience filter (Requirement 4: Common/Both items appear in applicable audience views)
+    if (filters.audience) {
+      const aud = filters.audience.toUpperCase();
+      if (aud === 'MEN') {
+        whereClauses.push("(p.audience IN ('MEN', 'ALL') OR c.audience IN ('MEN', 'ALL'))");
+      } else if (aud === 'WOMEN') {
+        whereClauses.push("(p.audience IN ('WOMEN', 'ALL') OR c.audience IN ('WOMEN', 'ALL'))");
+      } else if (aud === 'ALL' || aud === 'COMMON' || aud === 'BOTH') {
+        whereClauses.push("(p.audience = 'ALL' OR c.audience = 'ALL')");
+      }
     }
 
     // Fulltext search
@@ -46,11 +71,11 @@ export class ProductsService {
 
     // Price range
     if (filters.minPrice !== undefined && !isNaN(filters.minPrice)) {
-      whereClauses.push('p.base_price >= ?');
+      whereClauses.push('COALESCE(p.sale_price, p.base_price) >= ?');
       params.push(filters.minPrice);
     }
     if (filters.maxPrice !== undefined && !isNaN(filters.maxPrice)) {
-      whereClauses.push('p.base_price <= ?');
+      whereClauses.push('COALESCE(p.sale_price, p.base_price) <= ?');
       params.push(filters.maxPrice);
     }
 
@@ -72,7 +97,7 @@ export class ProductsService {
     }
 
     // Sorting
-    let orderBy = 'p.created_at DESC';
+    let orderBy = 'p.display_order ASC, p.created_at DESC';
     if (filters.sort === 'price_asc') {
       orderBy = 'COALESCE(p.sale_price, p.base_price) ASC';
     } else if (filters.sort === 'price_desc') {
@@ -81,15 +106,18 @@ export class ProductsService {
       orderBy = 'p.is_bestseller DESC, p.created_at DESC';
     } else if (filters.sort === 'newest') {
       orderBy = 'p.created_at DESC';
+    } else if (filters.sort === 'display_order') {
+      orderBy = 'p.display_order ASC, p.created_at DESC';
     }
 
-    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
 
     // Count query
     const countSql = `
       SELECT COUNT(DISTINCT p.id) AS total
       FROM products p
       JOIN product_categories c ON p.category_id = c.id
+      LEFT JOIN product_categories sub ON p.subcategory_id = sub.id
       ${whereSql}
     `;
     const countRes: any = await query(countSql, params);
@@ -99,9 +127,12 @@ export class ProductsService {
     // Data query
     const dataSql = `
       SELECT
-        p.id, p.category_id, c.name AS category_name, c.slug AS category_slug,
-        p.name, p.slug, p.sku_base, p.short_description, p.fabric, p.pattern, p.style,
-        p.base_price, p.sale_price, p.is_featured, p.is_bestseller, p.is_new_arrival,
+        p.id, p.category_id, p.subcategory_id, p.audience,
+        c.name AS category_name, c.slug AS category_slug,
+        sub.name AS subcategory_name, sub.slug AS subcategory_slug,
+        p.name, p.slug, p.sku_base, p.short_description, p.fabric, p.materials, p.pattern, p.style,
+        p.colors, p.tags, p.base_price, p.sale_price, p.display_order,
+        p.is_featured, p.is_bestseller, p.is_new_arrival,
         p.status, p.created_at,
         (
           SELECT s3_url FROM product_images
@@ -113,6 +144,11 @@ export class ProductsService {
           WHERE product_id = p.id AND is_primary = 0
           ORDER BY sort_order ASC LIMIT 1
         ) AS secondary_image_url,
+        (
+          SELECT s3_url FROM product_images
+          WHERE product_id = p.id AND (view_type = 'BACK' OR sort_order = 2)
+          LIMIT 1
+        ) AS back_image_url,
         (
           SELECT COALESCE(SUM(stock_quantity), 0) FROM product_variants
           WHERE product_id = p.id AND is_active = 1
@@ -127,6 +163,7 @@ export class ProductsService {
         ) AS review_count
       FROM products p
       JOIN product_categories c ON p.category_id = c.id
+      LEFT JOIN product_categories sub ON p.subcategory_id = sub.id
       ${whereSql}
       ORDER BY ${orderBy}
       LIMIT ? OFFSET ?
@@ -134,35 +171,59 @@ export class ProductsService {
 
     const products: any = await query(dataSql, [...params, limit, offset]);
 
-    // Attach basic available sizes
+    // Attach basic available sizes & images for rich display
     for (const prod of products) {
-      const variants: any = await query(
-        `SELECT pv.id, pv.sku, pv.price, pv.compare_at_price, pv.stock_quantity,
-                pav.value AS size_value
-         FROM product_variants pv
-         LEFT JOIN product_variant_attributes pva ON pv.id = pva.variant_id
-         LEFT JOIN product_attribute_values pav ON pva.attribute_value_id = pav.id AND pav.attribute_id = 1
-         WHERE pv.product_id = ? AND pv.is_active = 1`,
-        [prod.id]
-      );
+      const [variants, images]: any = await Promise.all([
+        query(
+          `SELECT pv.id, pv.sku, pv.price, pv.compare_at_price, pv.stock_quantity,
+                  pav.value AS size_value
+           FROM product_variants pv
+           LEFT JOIN product_variant_attributes pva ON pv.id = pva.variant_id
+           LEFT JOIN product_attribute_values pav ON pva.attribute_value_id = pav.id AND pav.attribute_id = 1
+           WHERE pv.product_id = ? AND pv.is_active = 1`,
+          [prod.id]
+        ),
+        query(
+          `SELECT id, s3_key, s3_url, alt_text, sort_order, is_primary, view_type
+           FROM product_images
+           WHERE product_id = ?
+           ORDER BY is_primary DESC, sort_order ASC`,
+          [prod.id]
+        ),
+      ]);
       prod.variants = variants;
+      prod.images = images.map((img: any) => ({
+        id: img.id,
+        productId: prod.id,
+        s3Key: img.s3_key,
+        s3Url: img.s3_url,
+        altText: img.alt_text,
+        sortOrder: img.sort_order,
+        isPrimary: Boolean(img.is_primary),
+        viewType: img.view_type || 'FRONT',
+      }));
     }
 
-    // Format products with camelCase mappings while keeping snake_case
     const formattedProducts = products.map((prod: any) => ({
       ...prod,
       categoryId: prod.category_id,
       categoryName: prod.category_name,
       categorySlug: prod.category_slug,
+      subcategoryId: prod.subcategory_id,
+      subcategoryName: prod.subcategory_name,
+      subcategorySlug: prod.subcategory_slug,
+      audience: prod.audience || 'WOMEN',
       skuBase: prod.sku_base,
       shortDescription: prod.short_description,
       basePrice: parseFloat(prod.base_price || 0),
       salePrice: prod.sale_price ? parseFloat(prod.sale_price) : null,
+      displayOrder: Number(prod.display_order || 0),
       isFeatured: Boolean(prod.is_featured),
       isBestseller: Boolean(prod.is_bestseller),
       isNewArrival: Boolean(prod.is_new_arrival),
       primaryImageUrl: prod.primary_image_url,
       secondaryImageUrl: prod.secondary_image_url,
+      backImageUrl: prod.back_image_url,
       totalStock: Number(prod.total_stock || 0),
       averageRating: parseFloat(prod.average_rating || 5),
       reviewCount: Number(prod.review_count || 0),
@@ -172,19 +233,21 @@ export class ProductsService {
       products: formattedProducts,
       meta: { page, limit, total, totalPages },
     };
-
   }
 
   /**
-   * Retrieves single product by clean SEO slug with all variants and images.
+   * Retrieves single product by clean SEO slug with all variants and multi-view images.
    */
   static async getProductBySlug(slug: string): Promise<ProductItem> {
     const products: any = await query(
       `SELECT
-        p.id, p.category_id, c.name AS category_name, c.slug AS category_slug,
+        p.id, p.category_id, p.subcategory_id, p.audience,
+        c.name AS category_name, c.slug AS category_slug,
+        sub.name AS subcategory_name, sub.slug AS subcategory_slug,
         p.name, p.slug, p.sku_base, p.short_description, p.description,
-        p.fabric, p.pattern, p.style, p.care_instructions,
-        p.base_price, p.sale_price, p.is_featured, p.is_bestseller, p.is_new_arrival,
+        p.fabric, p.materials, p.pattern, p.style, p.colors, p.tags, p.care_instructions,
+        p.base_price, p.sale_price, p.display_order,
+        p.is_featured, p.is_bestseller, p.is_new_arrival,
         p.status, p.seo_title, p.seo_description, p.canonical_url,
         p.created_at, p.updated_at,
         (
@@ -197,26 +260,38 @@ export class ProductsService {
         ) AS review_count
        FROM products p
        JOIN product_categories c ON p.category_id = c.id
+       LEFT JOIN product_categories sub ON p.subcategory_id = sub.id
        WHERE p.slug = ? AND p.status = 'ACTIVE' AND p.deleted_at IS NULL`,
       [slug]
     );
 
     if (!products.length) {
-      throw new AppError('Product not found or is currently unavailable', 404, 'NOT_FOUND');
+      throw new AppError('Product not found or is currently unpublished', 404, 'NOT_FOUND');
     }
 
     const product = products[0];
 
-    // Fetch images
-    const images: any = await query(
-      `SELECT id, product_id, s3_key, s3_url, alt_text, sort_order, is_primary
+    // Fetch images with viewType
+    const imagesRaw: any = await query(
+      `SELECT id, product_id, s3_key, s3_url, alt_text, sort_order, is_primary, view_type
        FROM product_images
        WHERE product_id = ?
        ORDER BY is_primary DESC, sort_order ASC`,
       [product.id]
     );
 
-    // Fetch variants with attribute details
+    const images = imagesRaw.map((img: any) => ({
+      id: img.id,
+      productId: img.product_id,
+      s3Key: img.s3_key,
+      s3Url: img.s3_url,
+      altText: img.alt_text,
+      sortOrder: img.sort_order,
+      isPrimary: Boolean(img.is_primary),
+      viewType: img.view_type || 'FRONT',
+    }));
+
+    // Fetch variants
     const variantsRaw: any = await query(
       `SELECT pv.id, pv.product_id, pv.sku, pv.price, pv.compare_at_price,
               pv.stock_quantity, pv.low_stock_threshold, pv.weight_grams, pv.barcode, pv.is_active
@@ -252,11 +327,19 @@ export class ProductsService {
       categoryId: product.category_id,
       categoryName: product.category_name,
       categorySlug: product.category_slug,
+      subcategoryId: product.subcategory_id,
+      subcategoryName: product.subcategory_name,
+      subcategorySlug: product.subcategory_slug,
+      audience: product.audience || 'WOMEN',
       skuBase: product.sku_base,
       shortDescription: product.short_description,
+      materials: product.materials,
+      colors: typeof product.colors === 'string' ? JSON.parse(product.colors) : product.colors,
+      tags: typeof product.tags === 'string' ? JSON.parse(product.tags) : product.tags,
       careInstructions: product.care_instructions,
       basePrice: parseFloat(product.base_price || 0),
       salePrice: product.sale_price ? parseFloat(product.sale_price) : null,
+      displayOrder: Number(product.display_order || 0),
       isFeatured: Boolean(product.is_featured),
       isBestseller: Boolean(product.is_bestseller),
       isNewArrival: Boolean(product.is_new_arrival),
@@ -268,15 +351,14 @@ export class ProductsService {
       averageRating: parseFloat(product.average_rating) || 5,
       reviewCount: Number(product.review_count) || 0,
     };
-
   }
 
   /**
-   * Retrieves related products in the same category.
+   * Retrieves related products in the same category or audience.
    */
   static async getRelatedProducts(productId: number, categoryId: number, limit: number = 4): Promise<any[]> {
     return query(
-      `SELECT p.id, p.name, p.slug, p.base_price, p.sale_price, p.fabric,
+      `SELECT p.id, p.name, p.slug, p.base_price, p.sale_price, p.fabric, p.audience,
               (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1) AS primary_image_url
        FROM products p
        WHERE p.category_id = ? AND p.id != ? AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
@@ -287,30 +369,119 @@ export class ProductsService {
   }
 
   /**
-   * Admin: Add new product with variants and initial inventory.
+   * Admin: List products with search, category, status, and audience filters.
+   */
+  static async adminGetProducts(queryParam: any): Promise<{ products: any[]; total: number }> {
+    const page = Math.max(1, Number(queryParam.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(queryParam.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    const where: string[] = ['p.deleted_at IS NULL'];
+    const params: any[] = [];
+
+    if (queryParam.category) {
+      where.push('(c.slug = ? OR c.id = ?)');
+      params.push(queryParam.category, isNaN(Number(queryParam.category)) ? -1 : Number(queryParam.category));
+    }
+    if (queryParam.status) {
+      where.push('p.status = ?');
+      params.push(queryParam.status);
+    }
+    if (queryParam.audience) {
+      where.push('p.audience = ?');
+      params.push(String(queryParam.audience).toUpperCase());
+    }
+    if (queryParam.search) {
+      where.push('(p.name LIKE ? OR p.sku_base LIKE ? OR p.fabric LIKE ? OR p.slug LIKE ?)');
+      const term = `%${queryParam.search.trim()}%`;
+      params.push(term, term, term, term);
+    }
+
+    const whereSql = `WHERE ${where.join(' AND ')}`;
+    const countRes: any = await query(
+      `SELECT COUNT(*) as count
+       FROM products p
+       JOIN product_categories c ON p.category_id = c.id
+       LEFT JOIN product_categories sub ON p.subcategory_id = sub.id
+       ${whereSql}`,
+      params
+    );
+    const total = countRes[0]?.count || 0;
+
+    const products: any = await query(
+      `SELECT p.*,
+              c.name as category_name, c.slug as category_slug,
+              sub.name as subcategory_name, sub.slug as subcategory_slug,
+              (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1) as primary_image_url,
+              (SELECT COALESCE(SUM(stock_quantity), 0) FROM product_variants WHERE product_id = p.id AND is_active = 1) as total_stock,
+              (SELECT COUNT(*) FROM product_variants WHERE product_id = p.id) as variant_count
+       FROM products p
+       JOIN product_categories c ON p.category_id = c.id
+       LEFT JOIN product_categories sub ON p.subcategory_id = sub.id
+       ${whereSql}
+       ORDER BY p.display_order ASC, p.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    // Attach images to each admin product
+    for (const prod of products) {
+      const images: any = await query(
+        `SELECT id, s3_key, s3_url, alt_text, sort_order, is_primary, view_type
+         FROM product_images WHERE product_id = ? ORDER BY is_primary DESC, sort_order ASC`,
+        [prod.id]
+      );
+      prod.images = images.map((img: any) => ({
+        id: img.id,
+        s3Key: img.s3_key,
+        s3Url: img.s3_url,
+        altText: img.alt_text,
+        sortOrder: img.sort_order,
+        isPrimary: Boolean(img.is_primary),
+        viewType: img.view_type || 'FRONT',
+      }));
+    }
+
+    return { products, total };
+  }
+
+  /**
+   * Admin: Add new product with variants, multi-view images, audience, and category mapping.
    */
   static async adminCreateProduct(data: any, adminId: number): Promise<any> {
+    // 1. Check slug uniqueness
+    const slugExists: any = await query('SELECT id FROM products WHERE slug = ? AND deleted_at IS NULL', [data.slug]);
+    if (slugExists.length > 0) {
+      throw new AppError(`A product with slug '${data.slug}' already exists`, 409, 'SLUG_CONFLICT');
+    }
+
     return withTransaction(async (conn) => {
-      // Insert product
+      // 2. Insert product record
       const [res]: any = await conn.query(
         `INSERT INTO products (
-          category_id, name, slug, sku_base, short_description, description,
-          fabric, pattern, style, care_instructions, base_price, sale_price,
-          is_featured, is_bestseller, is_new_arrival, status, seo_title, seo_description
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          category_id, subcategory_id, audience, name, slug, sku_base, short_description, description,
+          fabric, materials, pattern, style, colors, tags, care_instructions, base_price, sale_price,
+          display_order, is_featured, is_bestseller, is_new_arrival, status, seo_title, seo_description
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           data.categoryId,
-          data.name,
-          data.slug,
-          data.skuBase,
+          data.subcategoryId || null,
+          data.audience || 'WOMEN',
+          data.name.trim(),
+          data.slug.trim().toLowerCase(),
+          data.skuBase.trim().toUpperCase(),
           data.shortDescription,
           data.description,
           data.fabric || null,
+          data.materials || null,
           data.pattern || null,
           data.style || null,
+          data.colors ? JSON.stringify(data.colors) : null,
+          data.tags ? JSON.stringify(data.tags) : null,
           data.careInstructions || null,
           data.basePrice,
           data.salePrice || null,
+          data.displayOrder !== undefined ? data.displayOrder : 0,
           data.isFeatured ? 1 : 0,
           data.isBestseller ? 1 : 0,
           data.isNewArrival ? 1 : 0,
@@ -322,21 +493,41 @@ export class ProductsService {
 
       const productId = res.insertId;
 
-      // Insert images
-      if (Array.isArray(data.images)) {
+      // 3. Insert primary category mapping
+      await conn.query(
+        `INSERT IGNORE INTO product_category_mappings (product_id, category_id, is_primary) VALUES (?, ?, 1)`,
+        [productId, data.categoryId]
+      );
+      if (data.subcategoryId) {
+        await conn.query(
+          `INSERT IGNORE INTO product_category_mappings (product_id, category_id, is_primary) VALUES (?, ?, 0)`,
+          [productId, data.subcategoryId]
+        );
+      }
+
+      // 4. Insert multi-view images
+      if (Array.isArray(data.images) && data.images.length > 0) {
         let sort = 1;
         for (const img of data.images) {
           await conn.query(
-            `INSERT INTO product_images (product_id, s3_key, s3_url, alt_text, sort_order, is_primary)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [productId, img.s3Key || `products/${data.slug}/${sort}.webp`, img.s3Url, img.altText || data.name, sort, img.isPrimary ? 1 : 0]
+            `INSERT INTO product_images (product_id, s3_key, s3_url, alt_text, sort_order, is_primary, view_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              productId,
+              img.s3Key || `products/${data.slug}/${sort}.webp`,
+              img.s3Url,
+              img.altText || data.name,
+              img.sortOrder || sort,
+              img.isPrimary ? 1 : 0,
+              img.viewType || (sort === 1 ? 'FRONT' : sort === 2 ? 'BACK' : 'DETAIL'),
+            ]
           );
           sort++;
         }
       }
 
-      // Insert variants
-      if (Array.isArray(data.variants)) {
+      // 5. Insert variants
+      if (Array.isArray(data.variants) && data.variants.length > 0) {
         for (const v of data.variants) {
           const [vRes]: any = await conn.query(
             `INSERT INTO product_variants (product_id, sku, price, compare_at_price, stock_quantity, low_stock_threshold, is_active)
@@ -345,7 +536,7 @@ export class ProductsService {
           );
           const variantId = vRes.insertId;
 
-          // Record inventory audit
+          // Record initial inventory
           await conn.query(
             `INSERT INTO inventory_transactions (variant_id, transaction_type, quantity_change, previous_stock, current_stock, reference_type, notes, created_by_admin_id)
              VALUES (?, 'RESTOCK', ?, 0, ?, 'ADMIN_PRODUCT_CREATE', 'Initial stock on product creation', ?)`,
@@ -354,11 +545,11 @@ export class ProductsService {
         }
       }
 
-      // Record admin audit log
+      // 6. Record admin audit log
       await conn.query(
         `INSERT INTO admin_audit_logs (admin_id, action, resource_type, resource_id, new_values, ip_address)
          VALUES (?, 'CREATE_PRODUCT', 'PRODUCT', ?, ?, '127.0.0.1')`,
-        [adminId, productId.toString(), JSON.stringify({ name: data.name, slug: data.slug })]
+        [adminId, productId.toString(), JSON.stringify({ name: data.name, slug: data.slug, audience: data.audience })]
       );
 
       return { id: productId, name: data.name, slug: data.slug };
@@ -366,48 +557,137 @@ export class ProductsService {
   }
 
   /**
-   * Admin: List products with search, category, and status filters.
+   * Admin: Update product details, images, and variants.
    */
-  static async adminGetProducts(queryParam: any): Promise<{ products: any[]; total: number }> {
-    const page = Math.max(1, Number(queryParam.page) || 1);
-    const limit = Math.min(50, Math.max(1, Number(queryParam.limit) || 20));
-    const offset = (page - 1) * limit;
-
-    const where: string[] = ['p.deleted_at IS NULL'];
-    const params: any[] = [];
-
-    if (queryParam.category) {
-      where.push('c.slug = ?');
-      params.push(queryParam.category);
-    }
-    if (queryParam.status) {
-      where.push('p.status = ?');
-      params.push(queryParam.status);
-    }
-    if (queryParam.search) {
-      where.push('(p.name LIKE ? OR p.sku_base LIKE ? OR p.fabric LIKE ?)');
-      const term = `%${queryParam.search.trim()}%`;
-      params.push(term, term, term);
+  static async adminUpdateProduct(productId: number, data: any, adminId: number): Promise<any> {
+    const existing: any = await query('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL', [productId]);
+    if (!existing.length) {
+      throw new AppError(`Product with ID ${productId} not found`, 404, 'NOT_FOUND');
     }
 
-    const whereSql = `WHERE ${where.join(' AND ')}`;
-    const countRes: any = await query(`SELECT COUNT(*) as count FROM products p JOIN product_categories c ON p.category_id = c.id ${whereSql}`, params);
-    const total = countRes[0]?.count || 0;
+    if (data.slug && data.slug.trim().toLowerCase() !== existing[0].slug) {
+      const slugCheck: any = await query('SELECT id FROM products WHERE slug = ? AND id != ? AND deleted_at IS NULL', [data.slug.trim().toLowerCase(), productId]);
+      if (slugCheck.length > 0) {
+        throw new AppError(`A product with slug '${data.slug}' already exists`, 409, 'SLUG_CONFLICT');
+      }
+    }
 
-    const products: any = await query(
-      `SELECT p.*, c.name as category_name, c.slug as category_slug,
-              (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1) as primary_image_url,
-              (SELECT COALESCE(SUM(stock_quantity), 0) FROM product_variants WHERE product_id = p.id AND is_active = 1) as total_stock,
-              (SELECT COUNT(*) FROM product_variants WHERE product_id = p.id) as variant_count
-       FROM products p
-       JOIN product_categories c ON p.category_id = c.id
-       ${whereSql}
-       ORDER BY p.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
-    );
+    return withTransaction(async (conn) => {
+      // Update product fields
+      await conn.query(`
+        UPDATE products SET
+          category_id = COALESCE(?, category_id),
+          subcategory_id = CASE WHEN ? = 1 THEN ? ELSE subcategory_id END,
+          audience = COALESCE(?, audience),
+          name = COALESCE(?, name),
+          slug = COALESCE(?, slug),
+          sku_base = COALESCE(?, sku_base),
+          short_description = COALESCE(?, short_description),
+          description = COALESCE(?, description),
+          fabric = CASE WHEN ? = 1 THEN ? ELSE fabric END,
+          materials = CASE WHEN ? = 1 THEN ? ELSE materials END,
+          pattern = CASE WHEN ? = 1 THEN ? ELSE pattern END,
+          style = CASE WHEN ? = 1 THEN ? ELSE style END,
+          colors = CASE WHEN ? = 1 THEN ? ELSE colors END,
+          tags = CASE WHEN ? = 1 THEN ? ELSE tags END,
+          care_instructions = CASE WHEN ? = 1 THEN ? ELSE care_instructions END,
+          base_price = COALESCE(?, base_price),
+          sale_price = CASE WHEN ? = 1 THEN ? ELSE sale_price END,
+          display_order = COALESCE(?, display_order),
+          is_featured = CASE WHEN ? = 1 THEN ? ELSE is_featured END,
+          is_bestseller = CASE WHEN ? = 1 THEN ? ELSE is_bestseller END,
+          is_new_arrival = CASE WHEN ? = 1 THEN ? ELSE is_new_arrival END,
+          status = COALESCE(?, status),
+          seo_title = CASE WHEN ? = 1 THEN ? ELSE seo_title END,
+          seo_description = CASE WHEN ? = 1 THEN ? ELSE seo_description END,
+          updated_at = NOW()
+        WHERE id = ?
+      `, [
+        data.categoryId || null,
+        data.subcategoryId !== undefined ? 1 : 0, data.subcategoryId || null,
+        data.audience || null,
+        data.name ? data.name.trim() : null,
+        data.slug ? data.slug.trim().toLowerCase() : null,
+        data.skuBase ? data.skuBase.trim().toUpperCase() : null,
+        data.shortDescription || null,
+        data.description || null,
+        data.fabric !== undefined ? 1 : 0, data.fabric || null,
+        data.materials !== undefined ? 1 : 0, data.materials || null,
+        data.pattern !== undefined ? 1 : 0, data.pattern || null,
+        data.style !== undefined ? 1 : 0, data.style || null,
+        data.colors !== undefined ? 1 : 0, data.colors ? JSON.stringify(data.colors) : null,
+        data.tags !== undefined ? 1 : 0, data.tags ? JSON.stringify(data.tags) : null,
+        data.careInstructions !== undefined ? 1 : 0, data.careInstructions || null,
+        data.basePrice !== undefined ? data.basePrice : null,
+        data.salePrice !== undefined ? 1 : 0, data.salePrice || null,
+        data.displayOrder !== undefined ? data.displayOrder : null,
+        data.isFeatured !== undefined ? 1 : 0, data.isFeatured ? 1 : 0,
+        data.isBestseller !== undefined ? 1 : 0, data.isBestseller ? 1 : 0,
+        data.isNewArrival !== undefined ? 1 : 0, data.isNewArrival ? 1 : 0,
+        data.status || null,
+        data.seoTitle !== undefined ? 1 : 0, data.seoTitle || null,
+        data.seoDescription !== undefined ? 1 : 0, data.seoDescription || null,
+        productId,
+      ]);
 
-    return { products, total };
+      // Update category mapping
+      if (data.categoryId) {
+        await conn.query('DELETE FROM product_category_mappings WHERE product_id = ?', [productId]);
+        await conn.query('INSERT INTO product_category_mappings (product_id, category_id, is_primary) VALUES (?, ?, 1)', [productId, data.categoryId]);
+        if (data.subcategoryId) {
+          await conn.query('INSERT INTO product_category_mappings (product_id, category_id, is_primary) VALUES (?, ?, 0)', [productId, data.subcategoryId]);
+        }
+      }
+
+      // Update images if provided
+      if (Array.isArray(data.images) && data.images.length > 0) {
+        await conn.query('DELETE FROM product_images WHERE product_id = ?', [productId]);
+        let sort = 1;
+        for (const img of data.images) {
+          await conn.query(
+            `INSERT INTO product_images (product_id, s3_key, s3_url, alt_text, sort_order, is_primary, view_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              productId,
+              img.s3Key || `products/${data.slug || existing[0].slug}/${sort}.webp`,
+              img.s3Url,
+              img.altText || data.name || existing[0].name,
+              img.sortOrder || sort,
+              img.isPrimary ? 1 : 0,
+              img.viewType || (sort === 1 ? 'FRONT' : sort === 2 ? 'BACK' : 'DETAIL'),
+            ]
+          );
+          sort++;
+        }
+      }
+
+      // Update variants if provided
+      if (Array.isArray(data.variants) && data.variants.length > 0) {
+        for (const v of data.variants) {
+          if (v.id) {
+            await conn.query(
+              `UPDATE product_variants SET sku = ?, price = ?, compare_at_price = ?, stock_quantity = ?, low_stock_threshold = ?
+               WHERE id = ? AND product_id = ?`,
+              [v.sku, v.price, v.compareAtPrice || null, v.stockQuantity || 0, v.lowStockThreshold || 5, v.id, productId]
+            );
+          } else {
+            await conn.query(
+              `INSERT INTO product_variants (product_id, sku, price, compare_at_price, stock_quantity, low_stock_threshold, is_active)
+               VALUES (?, ?, ?, ?, ?, ?, 1)`,
+              [productId, v.sku, v.price, v.compareAtPrice || null, v.stockQuantity || 0, v.lowStockThreshold || 5]
+            );
+          }
+        }
+      }
+
+      await conn.query(
+        `INSERT INTO admin_audit_logs (admin_id, action, resource_type, resource_id, new_values, ip_address)
+         VALUES (?, 'UPDATE_PRODUCT', 'PRODUCT', ?, ?, '127.0.0.1')`,
+        [adminId, productId.toString(), JSON.stringify({ name: data.name, audience: data.audience, status: data.status })]
+      );
+
+      return { id: productId };
+    });
   }
 
   /**
@@ -434,4 +714,3 @@ export class ProductsService {
     );
   }
 }
-
