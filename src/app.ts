@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 
 import cors from 'cors';
 import express, { Application, Request, Response } from 'express';
+import path from 'path';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { testDbConnection } from './config/database';
@@ -99,6 +100,17 @@ export function createApp(): Application {
     })
   );
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  // Static serving for fallback local file uploads
+  app.use(
+    '/uploads',
+    express.static(path.join(process.cwd(), 'uploads'), {
+      setHeaders: (res) => {
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      },
+    })
+  );
 
   // 7. HTTP Request Logger (Morgan piped to Winston in production)
   app.use(

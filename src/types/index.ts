@@ -68,6 +68,7 @@ export interface CategoryItem {
   slug: string;
   description?: string | null;
   imageUrl?: string | null;
+  image_url?: string | null;
   audience: AudienceScope;
   isActive: boolean;
   displayOrder: number;

@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../../config/database';
 import { AppError } from '../../middleware/error-handler';
 import { AudienceScope, CategoryItem } from '../../types';
+import { MediaService } from '../media/media.service';
 
 export interface CategoryFilters {
   audience?: string;
@@ -81,7 +82,8 @@ export class CategoriesService {
       name: c.name,
       slug: c.slug,
       description: c.description,
-      imageUrl: c.image_url,
+      imageUrl: MediaService.formatMediaUrl(c.image_url) || c.image_url,
+      image_url: MediaService.formatMediaUrl(c.image_url) || c.image_url,
       audience: (c.audience || 'WOMEN') as AudienceScope,
       isActive: Boolean(c.is_active),
       displayOrder: Number(c.display_order || 0),
@@ -127,7 +129,8 @@ export class CategoriesService {
       name: c.name,
       slug: c.slug,
       description: c.description,
-      imageUrl: c.image_url,
+      imageUrl: MediaService.formatMediaUrl(c.image_url) || c.image_url,
+      image_url: MediaService.formatMediaUrl(c.image_url) || c.image_url,
       audience: (c.audience || 'WOMEN') as AudienceScope,
       isActive: Boolean(c.is_active),
       displayOrder: Number(c.display_order || 0),
@@ -159,7 +162,8 @@ export class CategoriesService {
       name: s.name,
       slug: s.slug,
       description: s.description,
-      imageUrl: s.image_url,
+      imageUrl: MediaService.formatMediaUrl(s.image_url) || s.image_url,
+      image_url: MediaService.formatMediaUrl(s.image_url) || s.image_url,
       audience: s.audience as AudienceScope,
       isActive: Boolean(s.is_active),
       displayOrder: Number(s.display_order || 0),
@@ -191,7 +195,8 @@ export class CategoriesService {
       name: c.name,
       slug: c.slug,
       description: c.description,
-      imageUrl: c.image_url,
+      imageUrl: MediaService.formatMediaUrl(c.image_url) || c.image_url,
+      image_url: MediaService.formatMediaUrl(c.image_url) || c.image_url,
       audience: (c.audience || 'WOMEN') as AudienceScope,
       isActive: Boolean(c.is_active),
       displayOrder: Number(c.display_order || 0),
@@ -281,7 +286,7 @@ export class CategoriesService {
         audience = COALESCE(?, audience),
         parent_id = CASE WHEN ? = 1 THEN ? ELSE parent_id END,
         display_order = COALESCE(?, display_order),
-        is_active = CASE WHEN ? = 1 THEN ? ELSE is_active END,
+        is_active = COALESCE(?, is_active),
         seo_title = CASE WHEN ? = 1 THEN ? ELSE seo_title END,
         seo_description = CASE WHEN ? = 1 THEN ? ELSE seo_description END
       WHERE id = ?

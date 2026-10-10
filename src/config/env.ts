@@ -43,12 +43,12 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().default('HumaTestSecretKey987654321'),
   RAZORPAY_WEBHOOK_SECRET: z.string().default('HumaWebhookSecretSecure999'),
 
-  // AWS S3
-  AWS_REGION: z.string().default('ap-south-1'),
-  AWS_ACCESS_KEY_ID: z.string().default('AKIA_DEFAULT_KEY'),
-  AWS_SECRET_ACCESS_KEY: z.string().default('default_secret_key'),
-  AWS_S3_BUCKET: z.string().default('huma-collection-media-prod'),
-  CLOUDFRONT_DOMAIN: z.string().default('https://images.unsplash.com'),
+  // AWS S3 Storage
+  AWS_REGION: z.string().default(process.env.STORAGE_REGION || process.env.AWS_REGION || 'ap-south-1'),
+  AWS_ACCESS_KEY_ID: z.string().default(process.env.STORAGE_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID || 'AKIA_DEFAULT_KEY'),
+  AWS_SECRET_ACCESS_KEY: z.string().default(process.env.STORAGE_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY || 'default_secret_key'),
+  AWS_S3_BUCKET: z.string().default(((process.env.STORAGE_BUCKET || process.env.AWS_S3_BUCKET || 'huma-collection-products-2026') as string).trim()),
+  CLOUDFRONT_DOMAIN: z.string().default(process.env.CLOUDFRONT_DOMAIN || 'https://huma-collection-products-2026.s3.ap-south-1.amazonaws.com'),
 
   // Business Defaults
   WHATSAPP_SUPPORT_NUMBER: z.string().default('+919876543210'),

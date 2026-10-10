@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../../config/database';
 import { AppError } from '../../middleware/error-handler';
 import { AudienceScope, ProductItem } from '../../types';
+import { MediaService } from '../media/media.service';
 
 export interface ProductFilterQuery {
   page?: number;
@@ -134,10 +135,9 @@ export class ProductsService {
         p.colors, p.tags, p.base_price, p.sale_price, p.display_order,
         p.is_featured, p.is_bestseller, p.is_new_arrival,
         p.status, p.created_at,
-        (
-          SELECT s3_url FROM product_images
-          WHERE product_id = p.id AND is_primary = 1
-          LIMIT 1
+        COALESCE(
+          (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1),
+          (SELECT s3_url FROM product_images WHERE product_id = p.id ORDER BY sort_order ASC, id ASC LIMIT 1)
         ) AS primary_image_url,
         (
           SELECT s3_url FROM product_images
@@ -196,7 +196,7 @@ export class ProductsService {
         id: img.id,
         productId: prod.id,
         s3Key: img.s3_key,
-        s3Url: img.s3_url,
+        s3Url: MediaService.formatMediaUrl(img.s3_url) || img.s3_url,
         altText: img.alt_text,
         sortOrder: img.sort_order,
         isPrimary: Boolean(img.is_primary),
@@ -221,9 +221,12 @@ export class ProductsService {
       isFeatured: Boolean(prod.is_featured),
       isBestseller: Boolean(prod.is_bestseller),
       isNewArrival: Boolean(prod.is_new_arrival),
-      primaryImageUrl: prod.primary_image_url,
-      secondaryImageUrl: prod.secondary_image_url,
-      backImageUrl: prod.back_image_url,
+      primaryImageUrl: MediaService.formatMediaUrl(prod.primary_image_url) || prod.primary_image_url,
+      primary_image_url: MediaService.formatMediaUrl(prod.primary_image_url) || prod.primary_image_url,
+      secondaryImageUrl: MediaService.formatMediaUrl(prod.secondary_image_url) || prod.secondary_image_url,
+      secondary_image_url: MediaService.formatMediaUrl(prod.secondary_image_url) || prod.secondary_image_url,
+      backImageUrl: MediaService.formatMediaUrl(prod.back_image_url) || prod.back_image_url,
+      back_image_url: MediaService.formatMediaUrl(prod.back_image_url) || prod.back_image_url,
       totalStock: Number(prod.total_stock || 0),
       averageRating: parseFloat(prod.average_rating || 5),
       reviewCount: Number(prod.review_count || 0),
@@ -284,7 +287,7 @@ export class ProductsService {
       id: img.id,
       productId: img.product_id,
       s3Key: img.s3_key,
-      s3Url: img.s3_url,
+      s3Url: MediaService.formatMediaUrl(img.s3_url) || img.s3_url,
       altText: img.alt_text,
       sortOrder: img.sort_order,
       isPrimary: Boolean(img.is_primary),
@@ -359,7 +362,10 @@ export class ProductsService {
   static async getRelatedProducts(productId: number, categoryId: number, limit: number = 4): Promise<any[]> {
     return query(
       `SELECT p.id, p.name, p.slug, p.base_price, p.sale_price, p.fabric, p.audience,
-              (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1) AS primary_image_url
+              COALESCE(
+                (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1),
+                (SELECT s3_url FROM product_images WHERE product_id = p.id ORDER BY sort_order ASC, id ASC LIMIT 1)
+              ) AS primary_image_url
        FROM products p
        WHERE p.category_id = ? AND p.id != ? AND p.status = 'ACTIVE' AND p.deleted_at IS NULL
        ORDER BY p.is_bestseller DESC, p.created_at DESC
@@ -412,7 +418,10 @@ export class ProductsService {
       `SELECT p.*,
               c.name as category_name, c.slug as category_slug,
               sub.name as subcategory_name, sub.slug as subcategory_slug,
-              (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1) as primary_image_url,
+              COALESCE(
+                (SELECT s3_url FROM product_images WHERE product_id = p.id AND is_primary = 1 LIMIT 1),
+                (SELECT s3_url FROM product_images WHERE product_id = p.id ORDER BY sort_order ASC, id ASC LIMIT 1)
+              ) as primary_image_url,
               (SELECT COALESCE(SUM(stock_quantity), 0) FROM product_variants WHERE product_id = p.id AND is_active = 1) as total_stock,
               (SELECT COUNT(*) FROM product_variants WHERE product_id = p.id) as variant_count
        FROM products p
@@ -434,12 +443,14 @@ export class ProductsService {
       prod.images = images.map((img: any) => ({
         id: img.id,
         s3Key: img.s3_key,
-        s3Url: img.s3_url,
+        s3Url: MediaService.formatMediaUrl(img.s3_url) || img.s3_url,
         altText: img.alt_text,
         sortOrder: img.sort_order,
         isPrimary: Boolean(img.is_primary),
         viewType: img.view_type || 'FRONT',
       }));
+      prod.primary_image_url = MediaService.formatMediaUrl(prod.primary_image_url) || prod.primary_image_url;
+      prod.primaryImageUrl = prod.primary_image_url;
     }
 
     return { products, total };
