@@ -21,7 +21,11 @@ const envSchema = z.object({
   BACKEND_PUBLIC_URL: z.string().default(process.env.BACKEND_PUBLIC_URL || (process.env.NODE_ENV === 'production' ? 'https://api.humacollection.in' : 'http://localhost:5000')),
   FRONTEND_URL: z.string().default('http://localhost:3000'),
   ADMIN_URL: z.string().default('http://localhost:5173'),
-  CORS_ORIGINS: z.string().default('http://localhost:3000,http://localhost:5173'),
+  CORS_ORIGINS: z
+    .string()
+    .default(
+      'https://www.humacollection.in,https://humacollection.in,https://admin.humacollection.in,https://api.humacollection.in,http://localhost:3000,http://localhost:5173,http://localhost:5000,http://localhost:4173'
+    ),
 
   // Database
   DB_HOST: z.string().default('127.0.0.1'),
@@ -66,4 +70,24 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-export const corsOriginsArray = env.CORS_ORIGINS.split(',').map((origin) => origin.trim());
+
+const defaultCorsOrigins = [
+  'https://www.humacollection.in',
+  'https://humacollection.in',
+  'https://admin.humacollection.in',
+  'https://api.humacollection.in',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:5000',
+  'http://localhost:4173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5000',
+];
+
+const parsedCorsOrigins = (env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, ''))
+  .filter(Boolean);
+
+export const corsOriginsArray = Array.from(new Set([...defaultCorsOrigins, ...parsedCorsOrigins]));

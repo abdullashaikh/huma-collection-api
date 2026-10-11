@@ -36,7 +36,70 @@ export function createApp(): Application {
   // 2. Request Correlation ID
   app.use(requestIdMiddleware);
 
-  // 3. Security Headers via Helmet
+  // 3. Robust Production CORS Configuration
+  const isAllowedOrigin = (origin?: string): boolean => {
+    // Allow non-browser requests (mobile apps, curl, server-to-server)
+    if (!origin) return true;
+
+    const normalized = origin.trim().replace(/\/+$/, '');
+
+    // 1. Check exact configured whitelist
+    if (corsOriginsArray.includes(normalized)) return true;
+
+    // 2. Any humacollection.in domain or subdomain (HTTPS or HTTP)
+    if (/^https?:\/\/([a-z0-9-]+\.)*humacollection\.in(:[0-9]+)?$/i.test(normalized)) {
+      return true;
+    }
+
+    // 3. Any localhost or 127.0.0.1 on any port (for local development of frontend/admin)
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/i.test(normalized)) {
+      return true;
+    }
+
+    // 4. Any Vercel preview or production deployment for Huma Collection
+    if (/^https:\/\/huma-[a-z0-9-]+.*\.vercel\.app$/i.test(normalized)) {
+      return true;
+    }
+
+    // 5. Development mode fallback
+    if (env.NODE_ENV !== 'production') {
+      return true;
+    }
+
+    return false;
+  };
+
+  const corsOptions: cors.CorsOptions = {
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+      } else {
+        logger.warn(`Blocked unauthorized CORS origin: ${origin}`);
+        callback(null, false); // Standard safe CORS behavior: reject without throwing 500 error
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Request-ID',
+      'X-Session-ID',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+      'Cache-Control',
+      'Pragma',
+    ],
+    exposedHeaders: ['X-Request-ID', 'X-Session-ID', 'Content-Range', 'Content-Length'],
+    optionsSuccessStatus: 200,
+    maxAge: 86400,
+  };
+
+  app.use(cors(corsOptions));
+  app.options('*', cors(corsOptions));
+
+  // 4. Security Headers via Helmet
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -64,23 +127,6 @@ export function createApp(): Application {
       },
       crossOriginResourcePolicy: { policy: 'cross-origin' },
       crossOriginEmbedderPolicy: false,
-    })
-  );
-
-  // 4. CORS Whitelist
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, server-to-server)
-        if (!origin) return callback(null, true);
-        if (corsOriginsArray.indexOf(origin) !== -1 || env.NODE_ENV !== 'production') {
-          return callback(null, true);
-        }
-        callback(new Error(`CORS origin '${origin}' is not permitted.`));
-      },
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Session-ID'],
     })
   );
 
