@@ -40,11 +40,13 @@ export class MediaController {
   }
 
   static async streamFile(req: any, res: Response): Promise<void> {
-    const s3Key = req.params[0] || req.params.key;
+    let s3Key = req.params[0] || req.params.key;
     if (!s3Key) {
       res.status(400).send('Missing S3 key');
       return;
     }
+    // Clean key: strip leading slashes, query parameters, or bucket name prefix
+    s3Key = s3Key.replace(/^\/+/, '').replace(/^(huma-collection-products-2026\/)/, '').split('?')[0];
     try {
       const obj = await MediaService.getFileStream(s3Key);
       if (obj.ContentType) res.setHeader('Content-Type', obj.ContentType);

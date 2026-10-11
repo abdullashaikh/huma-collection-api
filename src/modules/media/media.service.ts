@@ -33,22 +33,33 @@ export class MediaService {
     if (cfDomain && !cfDomain.includes('images.unsplash.com') && !cfDomain.includes('amazonaws.com')) {
       return `${cfDomain.replace(/\/$/, '')}/${s3Key}`;
     }
-    const host = process.env.BACKEND_PUBLIC_URL || `http://localhost:${env.PORT || 5000}`;
+    const host = process.env.BACKEND_PUBLIC_URL || (process.env.NODE_ENV === 'production' ? 'https://api.humacollection.in' : `http://localhost:${env.PORT || 5000}`);
     return `${host}/api/v1/media/file/${s3Key}`;
   }
 
   /**
-   * Automatically converts private S3 direct URLs to the streaming proxy
+   * Automatically converts private S3 direct URLs or localhost URLs to the streaming proxy
    */
   static formatMediaUrl(url: string | null | undefined): string | null {
     if (!url) return null;
-    if (url.includes(`${env.AWS_S3_BUCKET}.s3`) || (url.includes('s3.') && url.includes('amazonaws.com') && url.includes(env.AWS_S3_BUCKET))) {
-      const match = url.match(/amazonaws\.com\/(.+)$/);
-      if (match) {
-        const host = process.env.BACKEND_PUBLIC_URL || `http://localhost:${env.PORT || 5000}`;
-        return `${host}/api/v1/media/file/${match[1]}`;
+    const host = process.env.BACKEND_PUBLIC_URL || (process.env.NODE_ENV === 'production' ? 'https://api.humacollection.in' : `http://localhost:${env.PORT || 5000}`);
+
+    // If it is already a media proxy URL with localhost or another domain
+    if (url.includes('/api/v1/media/file/')) {
+      const parts = url.split('/api/v1/media/file/');
+      if (parts.length > 1) {
+        return `${host}/api/v1/media/file/${parts[1]}`;
       }
     }
+
+    // If it's an AWS S3 URL (private bucket returns 403, must route through streaming proxy)
+    if (url.includes('amazonaws.com')) {
+      let cleanKey = url.replace(/https?:\/\/[^\/]+\//, '');
+      cleanKey = cleanKey.replace(/^(huma-collection-products-2026\/)/, '');
+      cleanKey = cleanKey.split('?')[0];
+      return `${host}/api/v1/media/file/${cleanKey}`;
+    }
+
     return url;
   }
 

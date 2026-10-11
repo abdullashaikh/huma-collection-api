@@ -18,6 +18,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(5000),
   APP_NAME: z.string().default('Huma Hijab Collection API'),
   API_PREFIX: z.string().default('/api/v1'),
+  BACKEND_PUBLIC_URL: z.string().default(process.env.BACKEND_PUBLIC_URL || (process.env.NODE_ENV === 'production' ? 'https://api.humacollection.in' : 'http://localhost:5000')),
   FRONTEND_URL: z.string().default('http://localhost:3000'),
   ADMIN_URL: z.string().default('http://localhost:5173'),
   CORS_ORIGINS: z.string().default('http://localhost:3000,http://localhost:5173'),
@@ -52,7 +53,7 @@ const envSchema = z.object({
 
   // Business Defaults
   WHATSAPP_SUPPORT_NUMBER: z.string().default('+919876543210'),
-  SUPPORT_EMAIL: z.string().default('support@humahijabcollection.com'),
+  SUPPORT_EMAIL: z.string().default('support@humacollection.in'),
   STORE_NAME: z.string().default('Huma Hijab Collection'),
   DEFAULT_CURRENCY: z.string().default('INR'),
 });
