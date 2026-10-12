@@ -2,17 +2,18 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { v4 as uuidv4 } from 'uuid';
 import { env } from '../../config/env';
 import { logger } from '../../config/logger';
 import { AppError } from '../../middleware/error-handler';
 
 export const ALLOWED_MIME_TYPES: Record<string, { ext: string; maxSize: number }> = {
-  'image/webp': { ext: 'webp', maxSize: 10 * 1024 * 1024 }, // 10MB
-  'image/jpeg': { ext: 'jpg', maxSize: 10 * 1024 * 1024 },  // 10MB
-  'image/jpg': { ext: 'jpg', maxSize: 10 * 1024 * 1024 },   // 10MB
-  'image/png': { ext: 'png', maxSize: 10 * 1024 * 1024 },   // 10MB
-  'image/gif': { ext: 'gif', maxSize: 10 * 1024 * 1024 },   // 10MB
+  'image/webp': { ext: 'webp', maxSize: 25 * 1024 * 1024 }, // 25MB
+  'image/jpeg': { ext: 'jpg', maxSize: 25 * 1024 * 1024 },  // 25MB
+  'image/jpg': { ext: 'jpg', maxSize: 25 * 1024 * 1024 },   // 25MB
+  'image/png': { ext: 'png', maxSize: 25 * 1024 * 1024 },   // 25MB
+  'image/gif': { ext: 'gif', maxSize: 15 * 1024 * 1024 },   // 15MB
   'video/mp4': { ext: 'mp4', maxSize: 50 * 1024 * 1024 },  // 50MB
 };
 
@@ -106,6 +107,38 @@ export class MediaService {
       throw new AppError(`File exceeds maximum size limit of ${maxMb}MB`, 400, 'FILE_TOO_LARGE');
     }
 
+    let uploadBuffer = file.buffer;
+    let uploadMimeType = file.mimetype;
+    let uploadExt = mimeConfig.ext;
+
+    // Automatically optimize images (JPEG, PNG, WEBP) to WebP for instant storefront loading
+    if (file.mimetype.startsWith('image/') && file.mimetype !== 'image/gif') {
+      try {
+        const compressed = await sharp(file.buffer)
+          .rotate() // Auto-orient based on EXIF
+          .resize({
+            width: 1600,
+            height: 2400,
+            fit: 'inside',
+            withoutEnlargement: true,
+          })
+          .webp({ quality: 82, effort: 4 })
+          .toBuffer();
+
+        const originalSize = file.size;
+        uploadBuffer = compressed;
+        uploadMimeType = 'image/webp';
+        uploadExt = 'webp';
+
+        const reduction = ((1 - compressed.length / originalSize) * 100).toFixed(1);
+        logger.info(
+          `Optimized image '${file.originalname}': ${(originalSize / (1024 * 1024)).toFixed(2)}MB -> ${(compressed.length / 1024).toFixed(1)}KB (${reduction}% reduction)`
+        );
+      } catch (sharpErr: any) {
+        logger.warn(`Sharp image optimization skipped, using original buffer: ${sharpErr.message}`);
+      }
+    }
+
     // Clean name and create unique key
     const sanitizedBase = (file.originalname || 'upload')
       .toLowerCase()
@@ -114,15 +147,15 @@ export class MediaService {
       .replace(/-+/g, '-')
       .slice(0, 40);
     const uniqueSuffix = uuidv4().slice(0, 8);
-    const s3Key = `${folder}/${sanitizedBase}-${uniqueSuffix}.${mimeConfig.ext}`;
+    const s3Key = `${folder}/${sanitizedBase}-${uniqueSuffix}.${uploadExt}`;
 
     // Attempt AWS S3 PutObject
     try {
       const command = new PutObjectCommand({
         Bucket: env.AWS_S3_BUCKET,
         Key: s3Key,
-        Body: file.buffer,
-        ContentType: file.mimetype,
+        Body: uploadBuffer,
+        ContentType: uploadMimeType,
       });
 
       await s3Client.send(command);
@@ -132,9 +165,9 @@ export class MediaService {
       return {
         s3Url,
         s3Key,
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-        fileSize: file.size,
+        fileName: file.originalname.replace(/\.[^/.]+$/, '') + `.${uploadExt}`,
+        mimeType: uploadMimeType,
+        fileSize: uploadBuffer.length,
         storage: 's3',
       };
     } catch (err: any) {

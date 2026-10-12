@@ -9,7 +9,7 @@ const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 20 * 1024 * 1024, // 20MB per file
+    fileSize: 25 * 1024 * 1024, // 25MB per file (will be compressed to ~150-250KB WebP)
     files: 10,
   },
 });
