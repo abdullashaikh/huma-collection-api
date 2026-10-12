@@ -39,10 +39,14 @@ export class ProductsService {
     ];
     const params: any[] = [];
 
-    // Category filter (by slug or ID)
+    // Category filter (by slug or ID, including cross-category mappings)
     if (filters.category) {
-      whereClauses.push('(c.slug = ? OR c.id = ?)');
-      params.push(filters.category, isNaN(Number(filters.category)) ? -1 : Number(filters.category));
+      whereClauses.push(
+        '(c.slug = ? OR c.id = ? OR p.id IN (SELECT pcm.product_id FROM product_category_mappings pcm JOIN product_categories c2 ON pcm.category_id = c2.id WHERE c2.slug = ? OR c2.id = ?))'
+      );
+      const catVal = filters.category;
+      const catNum = isNaN(Number(catVal)) ? -1 : Number(catVal);
+      params.push(catVal, catNum, catVal, catNum);
     }
 
     // Subcategory filter
@@ -379,15 +383,19 @@ export class ProductsService {
    */
   static async adminGetProducts(queryParam: any): Promise<{ products: any[]; total: number }> {
     const page = Math.max(1, Number(queryParam.page) || 1);
-    const limit = Math.min(50, Math.max(1, Number(queryParam.limit) || 20));
+    const limit = Math.min(200, Math.max(1, Number(queryParam.limit) || 100));
     const offset = (page - 1) * limit;
 
     const where: string[] = ['p.deleted_at IS NULL'];
     const params: any[] = [];
 
     if (queryParam.category) {
-      where.push('(c.slug = ? OR c.id = ?)');
-      params.push(queryParam.category, isNaN(Number(queryParam.category)) ? -1 : Number(queryParam.category));
+      where.push(
+        '(c.slug = ? OR c.id = ? OR p.id IN (SELECT pcm.product_id FROM product_category_mappings pcm JOIN product_categories c2 ON pcm.category_id = c2.id WHERE c2.slug = ? OR c2.id = ?))'
+      );
+      const catVal = queryParam.category;
+      const catNum = isNaN(Number(catVal)) ? -1 : Number(catVal);
+      params.push(catVal, catNum, catVal, catNum);
     }
     if (queryParam.status) {
       where.push('p.status = ?');
@@ -428,7 +436,7 @@ export class ProductsService {
        JOIN product_categories c ON p.category_id = c.id
        LEFT JOIN product_categories sub ON p.subcategory_id = sub.id
        ${whereSql}
-       ORDER BY p.display_order ASC, p.created_at DESC
+       ORDER BY p.id DESC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
