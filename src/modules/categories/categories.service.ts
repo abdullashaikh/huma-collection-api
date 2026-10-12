@@ -79,6 +79,7 @@ export class CategoriesService {
     const categories: CategoryItem[] = categoriesRaw.map((c: any) => ({
       id: c.id,
       parentId: c.parent_id,
+      parent_id: c.parent_id,
       name: c.name,
       slug: c.slug,
       description: c.description,
@@ -86,11 +87,15 @@ export class CategoriesService {
       image_url: MediaService.formatMediaUrl(c.image_url) || c.image_url,
       audience: (c.audience || 'WOMEN') as AudienceScope,
       isActive: Boolean(c.is_active),
+      is_active: Boolean(c.is_active),
       displayOrder: Number(c.display_order || 0),
+      display_order: Number(c.display_order || 0),
       seoTitle: c.seo_title,
       seoDescription: c.seo_description,
       parentName: c.parent_name || null,
+      parent_name: c.parent_name || null,
       productCount: Number(c.product_count || 0),
+      product_count: Number(c.product_count || 0),
       createdAt: c.created_at,
       updatedAt: c.updated_at,
     }));

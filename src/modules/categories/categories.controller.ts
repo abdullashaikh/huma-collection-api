@@ -13,7 +13,7 @@ const createCategorySchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100),
   slug: z.string().min(2, 'Slug must be at least 2 characters').max(120),
   description: z.string().max(2000).optional().nullable(),
-  imageUrl: z.string().url('Image URL must be valid').optional().nullable().or(z.literal('')),
+  imageUrl: z.string().optional().nullable().or(z.literal('')),
   audience: z.enum(['MEN', 'WOMEN', 'ALL']).default('WOMEN'),
   parentId: z.number().int().positive().optional().nullable(),
   displayOrder: z.number().int().default(0),

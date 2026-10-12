@@ -11,6 +11,7 @@ router.post('/customer/otp/verify', authLimiter, AuthController.verifyOtp);
 
 // Admin endpoints
 router.post('/admin/login', authLimiter, AuthController.adminLogin);
+router.post('/admin/refresh', AuthController.adminRefresh);
 router.post('/admin/logout', AuthController.adminLogout);
 router.get('/admin/me', authenticateAdmin, AuthController.getAdminProfile);
 

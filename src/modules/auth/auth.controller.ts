@@ -54,7 +54,7 @@ export class AuthController {
       httpOnly: true,
       secure: env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 15 * 60 * 1000, // 15 mins
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
     });
 
     res.cookie('admin_refresh_token', result.refreshToken, {
@@ -65,6 +65,27 @@ export class AuthController {
     });
 
     sendSuccess(res, result, 'Admin authenticated successfully');
+  }
+
+  static async adminRefresh(req: Request, res: Response): Promise<void> {
+    const refreshToken = req.body?.refreshToken || req.cookies?.admin_refresh_token;
+    if (!refreshToken) {
+      res.status(401).json({
+        success: false,
+        statusCode: 401,
+        message: 'Administrative refresh token required.',
+        error: { code: 'REFRESH_TOKEN_REQUIRED' },
+      });
+      return;
+    }
+    const result = await AuthService.refreshAdminToken(refreshToken);
+    res.cookie('admin_access_token', result.accessToken, {
+      httpOnly: true,
+      secure: env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+    sendSuccess(res, result, 'Admin token refreshed successfully');
   }
 
   static async adminLogout(_req: Request, res: Response): Promise<void> {

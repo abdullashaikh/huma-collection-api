@@ -47,7 +47,7 @@ const createProductSchema = z.object({
   seoDescription: z.string().optional().nullable(),
   images: z.array(z.object({
     s3Key: z.string().optional(),
-    s3Url: z.string().url(),
+    s3Url: z.string().min(1, 'Image URL or path is required'),
     altText: z.string().optional(),
     isPrimary: z.boolean().optional(),
     sortOrder: z.number().optional(),

@@ -433,7 +433,7 @@ export class ProductsService {
       [...params, limit, offset]
     );
 
-    // Attach images to each admin product
+    // Attach images and variants to each admin product
     for (const prod of products) {
       const images: any = await query(
         `SELECT id, s3_key, s3_url, alt_text, sort_order, is_primary, view_type
@@ -451,6 +451,27 @@ export class ProductsService {
       }));
       prod.primary_image_url = MediaService.formatMediaUrl(prod.primary_image_url) || prod.primary_image_url;
       prod.primaryImageUrl = prod.primary_image_url;
+
+      const variants: any = await query(
+        `SELECT id, product_id, sku, price, compare_at_price, stock_quantity, low_stock_threshold, is_active
+         FROM product_variants WHERE product_id = ? AND is_active = 1 ORDER BY id ASC`,
+        [prod.id]
+      );
+      prod.variants = variants.map((v: any) => ({
+        id: v.id,
+        productId: v.product_id,
+        product_id: v.product_id,
+        sku: v.sku,
+        price: Number(v.price),
+        compareAtPrice: v.compare_at_price ? Number(v.compare_at_price) : null,
+        compare_at_price: v.compare_at_price ? Number(v.compare_at_price) : null,
+        stockQuantity: Number(v.stock_quantity),
+        stock_quantity: Number(v.stock_quantity),
+        lowStockThreshold: Number(v.low_stock_threshold || 5),
+        low_stock_threshold: Number(v.low_stock_threshold || 5),
+        isActive: Boolean(v.is_active),
+        is_active: v.is_active,
+      }));
     }
 
     return { products, total };
@@ -460,10 +481,55 @@ export class ProductsService {
    * Admin: Add new product with variants, multi-view images, audience, and category mapping.
    */
   static async adminCreateProduct(data: any, adminId: number): Promise<any> {
-    // 1. Check slug uniqueness
-    const slugExists: any = await query('SELECT id FROM products WHERE slug = ? AND deleted_at IS NULL', [data.slug]);
+    const cleanSlug = data.slug.trim().toLowerCase();
+    const cleanSkuBase = data.skuBase.trim().toUpperCase();
+
+    // 1. Check slug & skuBase uniqueness against active products
+    const slugExists: any = await query('SELECT id FROM products WHERE slug = ? AND deleted_at IS NULL', [cleanSlug]);
     if (slugExists.length > 0) {
       throw new AppError(`A product with slug '${data.slug}' already exists`, 409, 'SLUG_CONFLICT');
+    }
+
+    const skuExists: any = await query('SELECT id FROM products WHERE sku_base = ? AND deleted_at IS NULL', [cleanSkuBase]);
+    if (skuExists.length > 0) {
+      throw new AppError(`A product with SKU Base '${data.skuBase}' already exists`, 409, 'SKU_CONFLICT');
+    }
+
+    // 2. Clear any soft-deleted products that might be holding this slug or SKU base
+    const deletedConflicts: any = await query(
+      'SELECT id FROM products WHERE (slug = ? OR sku_base = ?) AND deleted_at IS NOT NULL',
+      [cleanSlug, cleanSkuBase]
+    );
+    if (deletedConflicts.length > 0) {
+      for (const d of deletedConflicts) {
+        await query(
+          'UPDATE products SET slug = CONCAT(slug, "-del-", ?), sku_base = CONCAT(sku_base, "-DEL-", ?) WHERE id = ?',
+          [Date.now(), Date.now(), d.id]
+        );
+        await query(
+          'UPDATE product_variants SET is_active = 0, sku = CONCAT(sku, "-DEL-", ?) WHERE product_id = ?',
+          [Date.now(), d.id]
+        );
+      }
+    }
+
+    // 3. Clear soft-deleted variant SKUs
+    if (Array.isArray(data.variants)) {
+      for (const v of data.variants) {
+        if (v.sku) {
+          const vSku = v.sku.trim();
+          const delVars: any = await query(
+            'SELECT pv.id FROM product_variants pv JOIN products p ON pv.product_id = p.id WHERE pv.sku = ? AND p.deleted_at IS NOT NULL',
+            [vSku]
+          );
+          for (const dv of delVars) {
+            await query(
+              'UPDATE product_variants SET is_active = 0, sku = CONCAT(sku, "-DEL-", ?) WHERE id = ?',
+              [Date.now(), dv.id]
+            );
+          }
+        }
+      }
     }
 
     return withTransaction(async (conn) => {
@@ -674,20 +740,48 @@ export class ProductsService {
 
       // Update variants if provided
       if (Array.isArray(data.variants) && data.variants.length > 0) {
+        const keptVariantIds: number[] = [];
         for (const v of data.variants) {
+          const vSku = (v.sku || '').trim();
+          if (!vSku) continue;
+
+          // Clear any soft-deleted variants with this SKU
+          const delVars: any = await conn.query(
+            'SELECT pv.id FROM product_variants pv JOIN products p ON pv.product_id = p.id WHERE pv.sku = ? AND p.deleted_at IS NOT NULL',
+            [vSku]
+          );
+          if (delVars[0]?.length > 0) {
+            for (const dv of delVars[0]) {
+              await conn.query(
+                'UPDATE product_variants SET is_active = 0, sku = CONCAT(sku, "-DEL-", ?) WHERE id = ?',
+                [Date.now(), dv.id]
+              );
+            }
+          }
+
           if (v.id) {
             await conn.query(
-              `UPDATE product_variants SET sku = ?, price = ?, compare_at_price = ?, stock_quantity = ?, low_stock_threshold = ?
+              `UPDATE product_variants SET sku = ?, price = ?, compare_at_price = ?, stock_quantity = ?, low_stock_threshold = ?, is_active = 1
                WHERE id = ? AND product_id = ?`,
-              [v.sku, v.price, v.compareAtPrice || null, v.stockQuantity || 0, v.lowStockThreshold || 5, v.id, productId]
+              [vSku, v.price, v.compareAtPrice || null, v.stockQuantity || 0, v.lowStockThreshold || 5, v.id, productId]
             );
+            keptVariantIds.push(v.id);
           } else {
-            await conn.query(
+            const [insRes]: any = await conn.query(
               `INSERT INTO product_variants (product_id, sku, price, compare_at_price, stock_quantity, low_stock_threshold, is_active)
                VALUES (?, ?, ?, ?, ?, ?, 1)`,
-              [productId, v.sku, v.price, v.compareAtPrice || null, v.stockQuantity || 0, v.lowStockThreshold || 5]
+              [productId, vSku, v.price, v.compareAtPrice || null, v.stockQuantity || 0, v.lowStockThreshold || 5]
             );
+            keptVariantIds.push(insRes.insertId);
           }
+        }
+
+        if (keptVariantIds.length > 0) {
+          // Deactivate variants removed from product
+          await conn.query(
+            `UPDATE product_variants SET is_active = 0 WHERE product_id = ? AND id NOT IN (?)`,
+            [productId, keptVariantIds]
+          );
         }
       }
 
@@ -715,13 +809,32 @@ export class ProductsService {
 
   /**
    * Admin: Soft-delete product.
+   * Frees up slug and SKU so same name/SKU can be re-created without unique key collision.
    */
   static async adminDeleteProduct(productId: number, adminId: number): Promise<void> {
-    await query('UPDATE products SET deleted_at = NOW(), status = \'ARCHIVED\' WHERE id = ?', [productId]);
-    await query(
-      `INSERT INTO admin_audit_logs (admin_id, action, resource_type, resource_id, ip_address)
-       VALUES (?, 'DELETE_PRODUCT', 'PRODUCT', ?, '127.0.0.1')`,
-      [adminId, productId.toString()]
-    );
+    const ts = Date.now();
+    await withTransaction(async (conn) => {
+      await conn.query(
+        `UPDATE products 
+         SET deleted_at = NOW(), 
+             status = 'ARCHIVED',
+             slug = CONCAT(slug, '-del-', ?),
+             sku_base = CONCAT(sku_base, '-DEL-', ?)
+         WHERE id = ?`,
+        [ts, ts, productId]
+      );
+      await conn.query(
+        `UPDATE product_variants 
+         SET is_active = 0,
+             sku = CONCAT(sku, '-DEL-', ?)
+         WHERE product_id = ?`,
+        [ts, productId]
+      );
+      await conn.query(
+        `INSERT INTO admin_audit_logs (admin_id, action, resource_type, resource_id, ip_address)
+         VALUES (?, 'DELETE_PRODUCT', 'PRODUCT', ?, '127.0.0.1')`,
+        [adminId, productId.toString()]
+      );
+    });
   }
 }

@@ -107,6 +107,10 @@ export async function authenticateAdmin(
 
     next();
   } catch (err: any) {
+    if (err?.name === 'TokenExpiredError') {
+      sendError(res, 'Administrative session expired. Please sign in again.', 401, 'ADMIN_TOKEN_EXPIRED');
+      return;
+    }
     sendError(res, 'Invalid administrative token.', 401, 'ADMIN_TOKEN_INVALID');
   }
 }
